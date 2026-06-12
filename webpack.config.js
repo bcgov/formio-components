@@ -7,7 +7,7 @@ module.exports = {
     libraryTarget: 'umd',
     libraryExport: 'default',
     path: path.resolve(__dirname, 'dist'),
-    filename: 'formio-contrib.js',
+    filename: 'bcgov-formio-components.js',
   },
   mode: 'development',
   performance: { hints: false },

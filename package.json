@@ -1,18 +1,16 @@
 {
-  "name": "@formio/contrib",
-  "version": "2.0.0",
-  "description": "Contrib components for form.io",
+  "name": "@bcgov/formio-components",
+  "version": "0.0.1",
+  "description": "BCGov Components for form.io",
   "main": "lib/index.js",
   "module": "node",
   "scripts": {
-    "test:coverage": "nyc --reporter=text mocha --reporter spec './{,!(node_modules)/**/}*.spec.js'",
-    "test": "mocha --require ejsify --require jsdom-global/register --reporter spec './{,!(node_modules)/**/}*.spec.ts'",
     "watch": "tsc -w",
     "webpack:dev": "webpack",
     "webpack:prod": "webpack --config webpack.prod.js",
     "webpack:use": "webpack --config webpack.use.js",
     "webpack": "npm run webpack:dev && npm run webpack:prod && npm run webpack:use",
-    "build": "tsc && gulp templates && npm run webpack && sass ./src/sass/contrib.scss ./dist/formio-contrib.css",
+    "build": "tsc && gulp templates && npm run webpack && sass ./src/sass/components.scss ./dist/bcgov-formio-components.css",
     "lint": "tslint -p .",
     "prepublish": "npm run build"
   },
@@ -25,18 +23,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/formio/contrib.git"
+    "url": "git+https://github.com/bcgov/formio-components.git"
   },
   "keywords": [
+    "BCGov",
     "Form.io",
     "components"
   ],
-  "author": "Travis Tidwell <travis@form.io>",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/formio/premium/issues"
-  },
-  "homepage": "https://github.com/formio/premium#readme",
+  "author": "Brandon Sharratt",
+  "homepage": "https://github.com/bcgov/formio-components#readme",
   "peerDependencies": {
     "@formio/js": "^5.0.0-rc.76"
   },

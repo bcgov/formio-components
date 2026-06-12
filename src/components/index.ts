@@ -1,10 +1,7 @@
 import checkmatrix from './CheckMatrix/CheckMatrix';
-import radiocard from './RadioCard/RadioCard';
-import resource from './resource/Resource';
-import tree from './tree/Tree';
+import file from './File/Component';
+
 export default {
   checkmatrix,
-  radiocard,
-  resource,
-  tree,
+  file,
 };
