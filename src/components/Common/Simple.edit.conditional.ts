@@ -1,5 +1,8 @@
-import { getContextComponents } from 'formiojs/utils/utils';
+import { Formio } from '@formio/js';
 import EditFormUtils from './utils';
+
+const getContextComponents = Formio.Utils.getContextComponents(context);
+
 /* eslint-disable quotes, max-len */
 export default [
   {
