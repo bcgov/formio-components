@@ -1,7 +1,7 @@
 import checkmatrix from './CheckMatrix/CheckMatrix';
-import bcgovfile from './File/Component';
+import BCGovFile from './BCGovFile/BCGovFile';
 
 export default {
   checkmatrix,
-  'bcgov-file': bcgovfile,
+  'bcgov-file': BCGovFile,
 };

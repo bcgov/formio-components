@@ -1,7 +1,7 @@
 /* tslint:disable */
 import { Components, Utils } from '@formio/js';
 const ParentComponent = (Components as any).components.file;
-import editForm from './Component.form';
+import editForm from './BCGovFile.form';
 
 import { Constants } from '../Common/Constants';
 import uniqueName = Utils.uniqueName;
@@ -37,7 +37,7 @@ function buildUrlPath(...segments: string[]) {
   );
 }
 
-export default class Component extends ParentComponent {
+export default class BCGovFile extends ParentComponent {
   static schema(...extend) {
     return ParentComponent.schema(
       {

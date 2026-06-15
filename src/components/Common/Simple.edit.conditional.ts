@@ -7,8 +7,8 @@ const getContextComponents = Formio.Utils.getContextComponents;
 export default [
   {
     type: 'panel',
-    title: 'Simple',
-    key: 'simple-conditional',
+    title: 'Conditional',
+    key: 'bcgov-conditional',
     theme: 'default',
     components: [
       {
