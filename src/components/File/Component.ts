@@ -68,7 +68,7 @@ export default class Component extends ParentComponent {
   static get builderInfo() {
     return {
       title: DISPLAY,
-      group: 'simple',
+      group: 'basic',
       icon: 'file',
       weight: 13,
       documentation: Constants.DEFAULT_HELP_LINK,
