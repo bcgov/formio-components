@@ -3,5 +3,5 @@ import bcgovfile from './File/Component';
 
 export default {
   checkmatrix,
-  bcgovfile,
+  'bcgov-file': bcgovfile,
 };
