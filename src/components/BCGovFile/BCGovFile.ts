@@ -72,7 +72,7 @@ export default class BCGovFile extends ParentComponent {
       icon: 'file',
       weight: 13,
       documentation: Constants.DEFAULT_HELP_LINK,
-      schema: Component.schema(),
+      schema: BCGovFile.schema(),
     };
   }
 
