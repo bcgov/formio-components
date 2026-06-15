@@ -6,7 +6,7 @@ import editForm from './Component.form';
 import { Constants } from '../Common/Constants';
 import uniqueName = Utils.uniqueName;
 
-const ID = 'gov-file';
+const ID = 'bcgov-file';
 const DISPLAY = 'File Upload';
 
 /**
