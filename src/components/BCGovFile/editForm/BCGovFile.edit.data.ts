@@ -6,7 +6,7 @@ export default [
         key: 'api',
         label: 'Url to the API Endpoint',
         tooltip: 'Url to the supported API endpoint',
-        defaultValue: '/api/v1/upload',
+        defaultValue: '/api/v1/files/local-storage',
     },
     {
         weight: 10,
