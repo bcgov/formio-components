@@ -1,9 +1,9 @@
 import { Components } from '@formio/js';
 const nestedComponentForm = (Components.components.nested as any).editForm;
 
-import EditData from './editForm/Component.edit.data';
-import EditDisplay from './editForm/Component.edit.display';
-import EditFile from './editForm/Component.edit.file';
+import EditData from './editForm/BCGovFile.edit.data';
+import EditDisplay from './editForm/BCGovFile.edit.display';
+import EditFile from './editForm/BCGovFile.edit.file';
 
 import SimpleApi from '../Common/Simple.edit.api';
 import SimpleConditional from '../Common/Simple.edit.conditional';
