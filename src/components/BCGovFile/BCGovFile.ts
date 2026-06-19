@@ -1,10 +1,16 @@
 /* tslint:disable */
 import { Components, Utils } from '@formio/js';
-const ParentComponent = (Components as any).components.file;
 import editForm from './BCGovFile.form';
-
 import { Constants } from '../Common/Constants';
-import uniqueName = Utils.uniqueName;
+
+// Defensively access components in case @formio/js is mocked/stubbed in SSR
+const baseFile = (Components as any)?.components?.file;
+const ParentComponent = baseFile || class {
+  static schema(...extend: any[]) {
+    return Object.assign({}, ...extend);
+  }
+};
+const uniqueName = Utils?.uniqueName || ((name: string) => name);
 
 const ID = 'bcgov-file';
 const DISPLAY = 'File Upload';
@@ -211,18 +217,18 @@ export default class BCGovFile extends ParentComponent {
         formData.append('fileName', fileName);
         if (dir) formData.append('dir', dir);
 
-            const opts = this.component.options ?? {};
-            let token = opts.token || opts.bearerToken || this.options?.token || '';
-            try {
-              const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
-              if (!token && F) {
-                token = (typeof F.getToken === 'function' && F.getToken()) || token;
-                token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
-                token = token || (F?.currentUser?.token ?? '');
-              }
-            } catch (e) {
-              // ignore
-            }
+        const opts = this.component.options ?? {};
+        let token = opts.token || opts.bearerToken || this.options?.token || '';
+        try {
+          const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
+          if (!token && F) {
+            token = (typeof F.getToken === 'function' && F.getToken()) || token;
+            token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
+            token = token || (F?.currentUser?.token ?? '');
+          }
+        } catch (e) {
+          // ignore
+        }
         const formId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? '';
         const submissionId = this.root?.submission?._id ?? this.root?.submission?.id ?? opts.submissionId ?? this.options?.submissionId ?? '';
         if (formId) formData.append('formId', formId);

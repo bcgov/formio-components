@@ -1,5 +1,5 @@
 import { Components } from '@formio/js';
-const nestedComponentForm = (Components.components.nested as any).editForm;
+const nestedComponentForm = (Components as any)?.components?.nested?.editForm || function(...args: any[]) { return args[0]; };
 
 import EditData from './editForm/BCGovFile.edit.data';
 import EditDisplay from './editForm/BCGovFile.edit.display';
