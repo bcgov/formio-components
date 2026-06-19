@@ -41,7 +41,8 @@ export default class BCGovFile extends ParentComponent {
         label: DISPLAY,
         key: ID,
         storage: 'chefs',
-        url: '/api/v1/files/local-storage',
+        api: '/api/v1/files/local-storage',
+        url: '/files',
         fileKey: 'files',
         fileNameTemplate: '{{fileName}}',
         image: false,
@@ -84,8 +85,7 @@ export default class BCGovFile extends ParentComponent {
   }
 
   getServerUrl() {
-    let url = this.component.url;
-    console.log('getServerUrl', url, this.options)
+    let url = this.component.api || this.component.url;
     // If it's the old default or empty, override with the global config if provided.
     if (!url || url === '/files') {
       const opts = this.options?.componentOptions?.[ID];
@@ -96,10 +96,11 @@ export default class BCGovFile extends ParentComponent {
         } else {
           url = buildUrlPath(cfg.basePath, cfg.apiPath, cfg.uploads.path);
         }
+      } else {
+        url = '/api/v1/files/local-storage';
       }
     }
     if (!url) url = '/api/v1/files/local-storage';
-    console.log('getServerUrl interpolating', url);
     return this.interpolate(url);
   }
 
