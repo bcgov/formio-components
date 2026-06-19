@@ -83,6 +83,24 @@ export default class BCGovFile extends ParentComponent {
     }
   }
 
+  getServerUrl() {
+    let url = this.component.url;
+    // If it's the old default or empty, override with the global config if provided.
+    if (!url || url === '/files') {
+      const opts = this.options?.componentOptions?.[ID];
+      if (opts?.config?.uploads) {
+        const cfg = opts.config;
+        if (cfg.uploads.webcomponents && cfg.uploads.url) {
+          url = cfg.uploads.url;
+        } else {
+          url = buildUrlPath(cfg.basePath, cfg.apiPath, cfg.uploads.path);
+        }
+      }
+    }
+    if (!url) url = '/api/v1/files/local-storage';
+    return this.interpolate(url);
+  }
+
   /**
    * Delete a file by calling DELETE {baseUrl}/{fileId} with Authorization header.
    */
@@ -109,7 +127,7 @@ export default class BCGovFile extends ParentComponent {
               }
             } catch (e) {}
 
-            const baseUrl = this.interpolate(this.component.url);
+            const baseUrl = this.getServerUrl();
             const url = `${baseUrl}/${fileId}`;
 
             const res = await fetch(url, {
@@ -152,7 +170,7 @@ export default class BCGovFile extends ParentComponent {
             const fileName = fileToSync.name;
             const dir = fileToSync.dir;
 
-            const url = this.interpolate(this.component.url);
+            const url = this.getServerUrl();
             const fileKey = this.component.fileKey ?? 'file';
 
             const formData = new FormData();
@@ -283,7 +301,7 @@ export default class BCGovFile extends ParentComponent {
     } catch (e) {
       // ignore
     }
-    const baseUrl = this.interpolate(this.component.url);
+    const baseUrl = this.getServerUrl();
     const url = `${baseUrl}/${fileId}`;
 
     return fetch(url, { method: 'GET', headers: token ? { Authorization: `Bearer ${token}` } : {} })
