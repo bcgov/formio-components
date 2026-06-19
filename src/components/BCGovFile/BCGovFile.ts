@@ -101,231 +101,182 @@ export default class BCGovFile extends ParentComponent {
   /**
    * Delete a file by calling DELETE {baseUrl}/{fileId} with Authorization header.
    */
-  deleteFile(fileInfo: any) {
-    if (!fileInfo) return Promise.resolve();
-    const fileId = fileInfo?.data?.id ?? fileInfo.id;
-    if (!fileId) return Promise.resolve();
-
-    const opts = this.component.options ?? {};
-    // Token can be provided via component options or via a global Formio auth context.
-    let token = opts.token || opts.bearerToken || this.options?.token || '';
-    // If not present, try common global Formio accessors as a fallback (defensive).
-    try {
-      const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
-      if (!token && F) {
-        // Formio.getToken() is not guaranteed; check a few places.
-        token = (typeof F.getToken === 'function' && F.getToken()) || token;
-        token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
-        token = token || (F?.currentUser?.token ?? '');
-      }
-    } catch (e) {
-      // ignore
+  async delete() {
+    if (!this.filesToSync?.filesToDelete?.length) {
+      return Promise.resolve();
     }
-    const baseUrl = this.interpolate(this.component.url);
-    const url = `${baseUrl}/${fileId}`;
+    return await Promise.all(
+      this.filesToSync.filesToDelete.map(async (fileToSync: any) => {
+        try {
+          if (fileToSync.isValidationError) {
+            return { fileToSync };
+          }
+          const fileId = fileToSync?.data?.id ?? fileToSync.id;
+          if (fileId) {
+            const opts = this.component.options ?? {};
+            let token = opts.token || opts.bearerToken || this.options?.token || '';
+            try {
+              const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
+              if (!token && F) {
+                token = (typeof F.getToken === 'function' && F.getToken()) || token;
+                token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
+                token = token || (F?.currentUser?.token ?? '');
+              }
+            } catch (e) {}
 
-    return fetch(url, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.text().then((t) => Promise.reject({ status: res.status, detail: t }));
-        }
-        return res.text();
-      })
-      .then(() => {
-        if (this.hasValue()) {
-          const id = fileId;
-          this.dataValue = (this.dataValue || []).filter((f) => (f?.data?.id ?? f?.id) !== id);
+            const baseUrl = this.interpolate(this.component.url);
+            const url = `${baseUrl}/${fileId}`;
+
+            const res = await fetch(url, {
+              method: 'DELETE',
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!res.ok) {
+              const text = await res.text();
+              throw { status: res.status, detail: text };
+            }
+          }
+
+          fileToSync.status = 'success';
+          fileToSync.message = this.t('Successfully removed');
+        } catch (response: any) {
+          fileToSync.status = 'error';
+          fileToSync.message = typeof response === 'string' ? response : response.toString();
+        } finally {
           this.redraw();
-          this.triggerChange();
         }
+        return { fileToSync };
       })
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('Delete file error', err);
-        alert(this.t('An error occurred while deleting the file.'));
-        return Promise.reject(err);
-      });
+    );
   }
 
-  /**
-   * Upload files by POSTing multipart/form-data to configured endpoint.
-   * Includes formId and submissionId when available. Uses XHR to report progress.
-   */
-  upload(files: FileList | File[] | any) {
-    if (!this.component.multiple) {
-      files = Array.prototype.slice.call(files, 0, 1);
+  async upload() {
+    if (!this.filesToSync?.filesToUpload?.length) {
+      return Promise.resolve();
     }
-
-    if (this.component && files && files.length) {
-      const uploadPromises = Array.prototype.map.call(files, (file: File) => {
-        return new Promise<any>((resolveUpload, rejectUpload) => {
-          const fileName = uniqueName(file.name, this.component.fileNameTemplate, this.evalContext());
-          const fileUpload: any = {
-            originalName: file.name,
-            name: fileName,
-            size: file.size,
-            status: 'info',
-            message: this.t('Starting upload'),
-          };
-
-          // Basic security / validation checks (keep existing behavior)
-          const fileNameLower = file.name.toLowerCase();
-          const systemBlockedExtensions = [
-            '.exe', '.bat', '.scr', '.com', '.pif', '.cmd', '.jar', '.app', '.deb', '.dmg', '.msi',
-            '.run', '.bin', '.sh', '.ps1', '.vbs', '.js', '.html', '.php', '.py', '.rb',
-          ];
-          if (systemBlockedExtensions.some((ext) => fileNameLower.endsWith(ext))) {
-            fileUpload.status = 'error';
-            fileUpload.message = this.t('This file type is not supported for security reasons.');
-            this.statuses.push(fileUpload);
-            this.redraw();
-            return rejectUpload('This file type is not supported for security reasons.');
+    return await Promise.all(
+      this.filesToSync.filesToUpload.map(async (fileToSync: any) => {
+        let fileInfo: any = null;
+        try {
+          if (fileToSync.isValidationError) {
+            return { fileToSync, fileInfo };
           }
 
-          const pattern = this.component.filePattern ?? undefined;
-          if (pattern && !this.validatePattern(file, pattern)) {
-            fileUpload.status = 'error';
-            fileUpload.message = this.t('File type not allowed. Supported: {{ pattern }}', { pattern: this.component.filePattern });
-            this.statuses.push(fileUpload);
-            this.redraw();
-            return rejectUpload('File type not allowed.');
-          }
+          fileInfo = await new Promise((resolveUpload, rejectUpload) => {
+            const file = fileToSync.file;
+            const fileName = fileToSync.name;
+            const dir = fileToSync.dir;
 
-          if (this.component.fileMinSize && !this.validateMinSize(file, this.component.fileMinSize)) {
-            fileUpload.status = 'error';
-            fileUpload.message = this.t('File is too small; it must be at least {{ size }}', { size: this.component.fileMinSize });
-            this.statuses.push(fileUpload);
-            this.redraw();
-            return rejectUpload('File is too small.');
-          }
+            const url = this.interpolate(this.component.url);
+            const fileKey = this.component.fileKey ?? 'file';
 
-          if (this.component.fileMaxSize && !this.validateMaxSize(file, this.component.fileMaxSize)) {
-            fileUpload.status = 'error';
-            fileUpload.message = this.t('File is too big; it must be at most {{ size }}', { size: this.component.fileMaxSize });
-            this.statuses.push(fileUpload);
-            this.redraw();
-            return rejectUpload('File is too big.');
-          }
+            const formData = new FormData();
+            formData.append(fileKey, file, file.name);
+            formData.append('fileName', fileName);
+            if (dir) formData.append('dir', dir);
 
-          const dir = this.interpolate(this.component.dir ?? '');
+            const opts = this.component.options ?? {};
+            let token = opts.token || opts.bearerToken || this.options?.token || '';
+            try {
+              const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
+              if (!token && F) {
+                token = (typeof F.getToken === 'function' && F.getToken()) || token;
+                token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
+                token = token || (F?.currentUser?.token ?? '');
+              }
+            } catch (e) {}
+            const formId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? '';
+            const submissionId = this.root?.submission?._id ?? this.root?.submission?.id ?? opts.submissionId ?? this.options?.submissionId ?? '';
+            if (formId) formData.append('formId', formId);
+            if (submissionId) formData.append('submissionId', submissionId);
 
-          this.statuses.push(fileUpload);
-          this.redraw();
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', url);
+            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
-          if (fileUpload.status === 'error') return rejectUpload('Upload error');
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                  const response = JSON.parse(xhr.responseText || '{}');
+                  const data = response?.data ?? response ?? {};
+                  const id = data.id ?? data._id ?? data.fileId ?? data.id;
 
-          if (this.component.privateDownload) (file as any).private = true;
+                  const info: any = {
+                    id,
+                    storage: this.component.storage,
+                    name: fileName,
+                    url: `${url}/${id}`,
+                    size: file.size,
+                    type: file.type,
+                    originalName: file.name,
+                    data: response,
+                  };
 
-          const url = this.interpolate(this.component.url);
-          const fileKey = this.component.fileKey ?? 'file';
-
-          const formData = new FormData();
-          // use the File object directly
-          formData.append(fileKey, file, file.name);
-          formData.append('fileName', fileName);
-          if (dir) formData.append('dir', dir);
-
-          const opts = this.component.options ?? {};
-          let token = opts.token || opts.bearerToken || this.options?.token || '';
-          try {
-            const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
-            if (!token && F) {
-              token = (typeof F.getToken === 'function' && F.getToken()) || token;
-              token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
-              token = token || (F?.currentUser?.token ?? '');
-            }
-          } catch (e) {
-            // ignore
-          }
-          const formId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? '';
-          const submissionId = this.root?.submission?._id ?? this.root?.submission?.id ?? opts.submissionId ?? this.options?.submissionId ?? '';
-          if (formId) formData.append('formId', formId);
-          if (submissionId) formData.append('submissionId', submissionId);
-
-          const uploadWithXHR = (uploadUrl_: string, fd: FormData, bearer?: string, onProgress?: (evt: ProgressEvent) => void) => {
-            return new Promise<any>((resolve, reject) => {
-              const xhr = new XMLHttpRequest();
-              xhr.open('POST', uploadUrl_);
-              if (bearer) xhr.setRequestHeader('Authorization', `Bearer ${bearer}`);
-              xhr.onload = function () {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    resolve(JSON.parse(xhr.responseText || '{}'));
-                  } catch (e) {
-                    resolve({});
+                  const returnedSubmissionId = data.submissionId ?? data.submission?._id ?? null;
+                  if (returnedSubmissionId) {
+                    this.root = this.root || {};
+                    this.root.submission = this.root.submission || {};
+                    this.root.submission._id = returnedSubmissionId;
                   }
-                } else {
-                  reject({ status: xhr.status, detail: xhr.responseText });
+
+                  resolveUpload(info);
+                } catch (e) {
+                  resolveUpload({});
+                }
+              } else {
+                rejectUpload({ status: xhr.status, detail: xhr.responseText });
+              }
+            };
+
+            xhr.onerror = () => {
+              rejectUpload({ status: xhr.status, detail: xhr.responseText });
+            };
+
+            if (xhr.upload) {
+              xhr.upload.onprogress = (evt) => {
+                if (evt.lengthComputable && typeof this.updateProgress === 'function') {
+                  this.updateProgress(fileToSync, evt);
                 }
               };
-              xhr.onerror = function () {
-                reject({ status: xhr.status, detail: xhr.responseText });
-              };
-              if (xhr.upload && typeof onProgress === 'function') xhr.upload.onprogress = onProgress;
-              xhr.send(fd);
-            });
-          };
+            }
 
-          uploadWithXHR(url, formData, token, (evt) => {
-            fileUpload.status = 'progress';
-            if (evt.lengthComputable) fileUpload.progress = (100 * evt.loaded) / evt.total;
-            delete fileUpload.message;
-            this.redraw();
-          })
-            .then((response) => {
-              const data = response?.data ?? response ?? {};
-              const id = data.id ?? data._id ?? data.fileId ?? data.id;
-              const originalname = data.originalname ?? data.filename ?? data.name ?? file.name;
-              const size = data.size ?? data.filesize ?? file.size;
-              const mimetype = data.mimetype ?? data.type ?? file.type;
+            if (this.abortUploads) {
+              this.abortUploads.push({
+                id: fileToSync.id,
+                abort: () => xhr.abort(),
+              });
+            }
 
-              const index = this.statuses.indexOf(fileUpload);
-              if (index !== -1) this.statuses.splice(index, 1);
+            xhr.send(formData);
+          });
 
-              const fileInfo: any = {
-                storage: 'chefs',
-                name: originalname,
-                originalName: file.name,
-                url: id ? `${url}/${id}` : `${url}`,
-                size,
-                type: mimetype,
-                data: { id },
-              };
-
-              if (!this.hasValue()) this.dataValue = [];
-              this.dataValue.push(fileInfo);
-
-              const returnedSubmissionId = data.submissionId ?? data.submission?._id ?? null;
-              if (returnedSubmissionId) {
-                this.root = this.root || {};
-                this.root.submission = this.root.submission || {};
-                this.root.submission._id = returnedSubmissionId;
-              }
-
-              this.redraw();
-              this.triggerChange();
-              resolveUpload(fileInfo);
-            })
-            .catch((error_) => {
-              fileUpload.status = 'error';
-              let message = 'An unexpected error occured during file upload.';
-              const detail = error_?.detail || '';
-              const status = error_?.status || 0;
-              if (status === 409 || (typeof detail === 'string' && detail.includes('409'))) message = 'File did not pass the virus scanner.';
-              else if (status === 400 || (typeof detail === 'string' && detail.includes('400'))) message = 'File could not be uploaded.';
-              fileUpload.message = this.t(message);
-              delete fileUpload.progress;
-              this.redraw();
-              rejectUpload(error_);
-            });
-        });
-      });
-      return Promise.all(uploadPromises);
-    }
-    return Promise.resolve();
+          fileToSync.status = 'success';
+          fileToSync.message = this.t('Successfully uploaded');
+          if (fileInfo) {
+            fileInfo.originalName = fileToSync.originalName;
+            fileInfo.hash = fileToSync.hash;
+          }
+        } catch (response: any) {
+          fileToSync.status = 'error';
+          delete fileToSync.progress;
+          let message = 'An unexpected error occured during file upload.';
+          if (response?.status) {
+            const detail = response.detail || '';
+            if (response.status === 409 || detail.includes('409')) message = 'File did not pass the virus scanner.';
+            else if (response.status === 400 || detail.includes('400')) message = 'File could not be uploaded.';
+            else message = `Error ${response.status}: ${detail || 'Unknown error'}`;
+          } else {
+            message = typeof response === 'string' ? response : response.type === 'abort' ? this.t('Request was aborted') : response.toString();
+          }
+          fileToSync.message = this.t(message);
+          this.emit('fileUploadError', { fileToSync, response });
+        } finally {
+          delete fileToSync.progress;
+          this.redraw();
+        }
+        return { fileToSync, fileInfo };
+      })
+    );
   }
 
   /**
