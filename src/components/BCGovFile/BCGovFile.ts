@@ -105,7 +105,7 @@ export default class BCGovFile extends ParentComponent {
     let token = opts.token || opts.bearerToken || this.options?.token || '';
     // If not present, try common global Formio accessors as a fallback (defensive).
     try {
-      const F = (window as any).Formio || (globalThis as any).Formio;
+      const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
       if (!token && F) {
         // Formio.getToken() is not guaranteed; check a few places.
         token = (typeof F.getToken === 'function' && F.getToken()) || token;
@@ -214,7 +214,7 @@ export default class BCGovFile extends ParentComponent {
             const opts = this.component.options ?? {};
             let token = opts.token || opts.bearerToken || this.options?.token || '';
             try {
-              const F = (window as any).Formio || (globalThis as any).Formio;
+              const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
               if (!token && F) {
                 token = (typeof F.getToken === 'function' && F.getToken()) || token;
                 token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
@@ -316,7 +316,7 @@ export default class BCGovFile extends ParentComponent {
     const opts = this.component.options ?? {};
     let token = opts.token || opts.bearerToken || this.options?.token || '';
     try {
-      const F = (window as any).Formio || (globalThis as any).Formio;
+      const F = (typeof window !== 'undefined' ? (window as any).Formio : undefined) || (globalThis as any).Formio;
       if (!token && F) {
         token = (typeof F.getToken === 'function' && F.getToken()) || token;
         token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
@@ -336,16 +336,20 @@ export default class BCGovFile extends ParentComponent {
       .then((blob) => {
         try {
           const downloadUrl = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = fileInfo.originalName || fileInfo.name || 'file';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
+          if (typeof document !== 'undefined') {
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = fileInfo.originalName || fileInfo.name || 'file';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
           URL.revokeObjectURL(downloadUrl);
         } catch (err) {
           const blobUrl = URL.createObjectURL(blob);
-          window.open(blobUrl, '_blank');
+          if (typeof window !== 'undefined') {
+            window.open(blobUrl, '_blank');
+          }
           URL.revokeObjectURL(blobUrl);
         }
       })
