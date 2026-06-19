@@ -80,23 +80,6 @@ export default class BCGovFile extends ParentComponent {
     if (this.options?.componentOptions) {
       const opts = this.options.componentOptions[ID];
       this.component.options = { ...this.component.options, ...opts };
-      // the config.uploads object will say what size our server can handle and what path to use.
-      if (opts?.config?.uploads) {
-        const cfg = opts.config;
-        const uploads = cfg.uploads;
-
-        this.component.fileMinSize = uploads.fileMinSize;
-        this.component.fileMaxSize = uploads.fileMaxSize;
-        // Only set the default url from global config if one is not already provided by the user/schema
-        if (!this.component.url || this.component.url === '/files') {
-          if (uploads.webcomponents && uploads.url) {
-            this.component.url = uploads.url;
-          } else {
-            this.component.url = buildUrlPath(cfg.basePath, cfg.apiPath, uploads.path);
-          }
-        }
-        this._enabled = uploads.enabled;
-      }
     }
   }
 
