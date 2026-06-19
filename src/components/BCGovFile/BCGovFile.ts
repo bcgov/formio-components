@@ -85,6 +85,7 @@ export default class BCGovFile extends ParentComponent {
 
   getServerUrl() {
     let url = this.component.url;
+    console.log('getServerUrl', url, this.options)
     // If it's the old default or empty, override with the global config if provided.
     if (!url || url === '/files') {
       const opts = this.options?.componentOptions?.[ID];
@@ -98,6 +99,7 @@ export default class BCGovFile extends ParentComponent {
       }
     }
     if (!url) url = '/api/v1/files/local-storage';
+    console.log('getServerUrl interpolating', url);
     return this.interpolate(url);
   }
 
@@ -125,7 +127,7 @@ export default class BCGovFile extends ParentComponent {
                 token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
                 token = token || (F?.currentUser?.token ?? '');
               }
-            } catch (e) {}
+            } catch (e) { }
 
             const baseUrl = this.getServerUrl();
             const url = `${baseUrl}/${fileId}`;
@@ -187,7 +189,7 @@ export default class BCGovFile extends ParentComponent {
                 token = token || (F?.tokens?.accessToken ?? F?.token ?? '');
                 token = token || (F?.currentUser?.token ?? '');
               }
-            } catch (e) {}
+            } catch (e) { }
             const formId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? '';
             const submissionId = this.root?.submission?._id ?? this.root?.submission?.id ?? opts.submissionId ?? this.options?.submissionId ?? '';
             if (formId) formData.append('formId', formId);
