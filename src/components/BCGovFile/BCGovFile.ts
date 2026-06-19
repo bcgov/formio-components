@@ -41,7 +41,7 @@ export default class BCGovFile extends ParentComponent {
         label: DISPLAY,
         key: ID,
         storage: 'chefs',
-        url: '/files',
+        url: '/api/v1/files/local-storage',
         fileKey: 'files',
         fileNameTemplate: '{{fileName}}',
         image: false,
