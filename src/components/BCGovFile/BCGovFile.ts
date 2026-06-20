@@ -85,7 +85,6 @@ export default class BCGovFile extends ParentComponent {
   }
 
   getServerUrl() {
-    console.log('getServerUrl', this.component)
     let url = this.component.api || this.component.url;
     // If it's the old default or empty, override with the global config if provided.
     if (!url || url === '/files') {
@@ -192,20 +191,11 @@ export default class BCGovFile extends ParentComponent {
                 token = token || (F?.currentUser?.token ?? '');
               }
             } catch (e) { }
-            
-            console.log('DEBUG UPLOAD IDs', {
-              root_form_id: this.root?.form?._id,
-              root_form_id_no_us: this.root?.form?.id,
-              root_id: this.root?.id,
-              opts_formId: opts?.formId,
-              options_formId: this.options?.formId,
-              options_properties: this.options?.properties,
-              root_form_properties: this.root?.form?.properties
-            });
 
-            const formId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? '';
+
+            const formVersionId = this.root?.form?._id ?? this.root?.form?.id ?? opts.formId ?? this.options?.formId ?? this.options?.properties?.formId ?? this.root?.form?.properties?.formId ?? '';
             const submissionId = this.root?.submission?._id ?? this.root?.submission?.id ?? opts.submissionId ?? this.options?.submissionId ?? '';
-            if (formId) formData.append('formId', formId);
+            if (formVersionId) formData.append('formVersionId', formVersionId);
             if (submissionId) formData.append('submissionId', submissionId);
 
             const xhr = new XMLHttpRequest();
