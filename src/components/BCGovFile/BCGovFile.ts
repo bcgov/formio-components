@@ -131,7 +131,8 @@ export default class BCGovFile extends ParentComponent {
             } catch (e) { }
 
             const baseUrl = this.getServerUrl();
-            const url = `${baseUrl}/${fileId}`;
+            const safeFileId = encodeURIComponent(fileId);
+            const url = `${baseUrl}/${safeFileId}`;
 
             const res = await fetch(url, {
               method: 'DELETE',
