@@ -41,7 +41,7 @@ export default class BCGovFile extends ParentComponent {
         label: DISPLAY,
         key: ID,
         storage: 'chefs',
-        api: '/api/v1/files/local-storage',
+        api: '/api/v1/files/s3-compatible',
         url: '/files',
         fileKey: 'files',
         fileNameTemplate: '{{fileName}}',
@@ -97,10 +97,10 @@ export default class BCGovFile extends ParentComponent {
           url = buildUrlPath(cfg.basePath, cfg.apiPath, cfg.uploads.path);
         }
       } else {
-        url = '/api/v1/files/local-storage';
+        url = '/api/v1/files/s3-compatible';
       }
     }
-    if (!url) url = '/api/v1/files/local-storage';
+    if (!url) url = '/api/v1/files/s3-compatible';
     return this.interpolate(url);
   }
 
