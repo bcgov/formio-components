@@ -12,6 +12,7 @@
     "webpack": "npm run webpack:dev && npm run webpack:prod && npm run webpack:use",
     "build": "tsc && gulp templates && npm run webpack && sass ./src/sass/components.scss ./dist/bcgov-formio-components.css",
     "lint": "tslint -p .",
+    "prepare": "tsc && gulp templates",
     "prepublish": "npm run build"
   },
   "pre-commit": [
