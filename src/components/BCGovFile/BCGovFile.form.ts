@@ -1,7 +1,6 @@
 import { Components } from '@formio/js';
-const nestedComponentForm = (Components as any)?.components?.nested?.editForm || function(...args: any[]) { return args[0]; };
+const nestedComponentForm = (Components as any)?.components?.nested?.editForm || ((...args: any[]) => args[0]);
 
-import EditData from './editForm/BCGovFile.edit.data';
 import EditDisplay from './editForm/BCGovFile.edit.display';
 import EditFile from './editForm/BCGovFile.edit.file';
 
@@ -45,12 +44,6 @@ export default function(...extend) {
             key: 'file',
             weight: 10,
             components: EditFile
-        },
-        {
-            label: 'Data',
-            key: 'customData',
-            weight: 15,
-            components: EditData
         },
         {
             label: 'Validation',
