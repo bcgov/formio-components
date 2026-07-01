@@ -1,1 +1,2 @@
-export { createChefsProvider, ChefsProviderConfig } from './chefs';
+export { createChefsProvider } from './chefs';
+export type { ChefsProviderConfig } from './chefs';

@@ -1,8 +1,7 @@
 import { Formio } from '@formio/js';
 
-// Built-in Form.io storage providers. These require an enterprise license, and
-// this component exists specifically as a non-enterprise workaround, so they are
-// hidden from the picker — only custom-registered providers (e.g. 'chefs') show.
+// Built-in providers are enterprise-licensed; hide them so only custom
+// providers (e.g. 'chefs') show in the picker.
 const STOCK_STORAGE_PROVIDERS = ['base64', 's3', 'url', 'azure', 'indexeddb', 'googledrive'];
 
 export default [
@@ -18,13 +17,13 @@ export default [
     valueProperty: 'value',
     dataSrc: 'custom',
     data: {
-      // Populate from custom-registered storage providers only (built-ins hidden).
+      // custom-registered providers only
       custom() {
         const providers = (Formio as any)?.Providers?.getProviders?.('storage') || {};
         return Object.keys(providers)
-          .filter((key) => STOCK_STORAGE_PROVIDERS.indexOf(key) === -1)
+          .filter((key) => !STOCK_STORAGE_PROVIDERS.includes(key))
           .map((key) => ({
-            label: (providers[key] && providers[key].title) || key,
+            label: providers[key]?.title || key,
             value: key,
           }));
       },

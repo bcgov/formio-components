@@ -1,199 +1,203 @@
-/* tslint:disable */
 /**
- * CHEFS storage provider for Form.io's pluggable fileService.
- *
- * This is an *opt-in* provider: it is NOT registered automatically by the
- * components package. A host application registers it explicitly and injects
- * its own runtime specifics (API base URL, bearer token, workspace + submission id):
- *
- *   import { Formio } from '@formio/js';
- *   import { createChefsProvider } from '@bcgov/formio-components';
+ * CHEFS storage provider for Form.io's fileService. Opt-in: the host registers it
+ * and passes filesUrl + a token getter (workspace/submission ids optional).
  *
  *   Formio.Providers.addProvider('storage', 'chefs', createChefsProvider({
- *     apiBase: '',                                   // '' = same-origin
- *     filesPath: '/api/v1/files',                    // files collection endpoint
- *     getToken:        () => keycloak.updateToken(30).then(() => keycloak.token),
- *     getWorkspaceId:  async () => sessionStorage.getItem('soba.workspaceId'),
- *     getSubmissionId: async () => sessionStorage.getItem('soba.submissionId'),
+ *     filesUrl: `${getSobaApiBaseUrl()}/files`,
+ *     getToken: () => currentBearerToken(),
+ *     getWorkspaceId: () => currentWorkspaceId(),
  *   }));
  *
- * A BCGovFile component with `storage: 'chefs'` then routes upload/download/
- * delete through this provider via `this.fileService`. The component itself
- * contains no tokens, tenant ids, or fixed URLs.
+ * Per-file URLs are {filesUrl}/{id}, so upload only needs to return { id, name, size, type }.
  *
- * Backend contract (with the default filesPath):
- *   Upload:   POST   {apiBase}{filesPath}?workspaceId=<id>   (multipart)
- *             fields: <fileKey> (default 'file'), fileName, submissionId (the
- *                     owning CHEFS resource, from getSubmissionId), optional dir
- *             header: Authorization: Bearer <token>
- *             response: { id, storage, name, originalName,
- *                         url: '{filesPath}/<id>', size, type, data }
- *   Download: GET    {apiBase}{url} + Authorization: Bearer <token>  -> bytes
- *   Delete:   DELETE {apiBase}{url} + Authorization: Bearer <token>  -> 204
+ *   Upload:   POST   {filesUrl}?workspaceId=<id>  (multipart: <fileKey>, fileName, submissionId?, dir?)
+ *   Download: GET    {filesUrl}/{id}
+ *   Delete:   DELETE {filesUrl}/{id}
+ *   ...all with `Authorization: Bearer <token>`.
  */
 
+/** Static value, or a sync/async getter for it. */
+type Resolvable = string | (() => string | Promise<string>);
+
 export interface ChefsProviderConfig {
-  /** Absolute base URL of the files API pod, or '' for same-origin. */
-  apiBase?: string;
-  /** Files collection endpoint path used for uploads. Defaults to '/api/v1/files'. */
-  filesPath?: string;
-  /** Returns the current bearer token; evaluated per-request so it never goes stale. */
-  getToken: () => string | Promise<string>;
-  /** Returns the current workspace id; appended to the upload URL as ?workspaceId=. */
-  getWorkspaceId: () => string | Promise<string>;
-  /**
-   * Returns the current CHEFS submission id — the resource the uploaded file
-   * belongs to. This is the app's own submission id, NOT Form.io's data
-   * submission id. Sent as the `submissionId` upload field when present.
-   */
-  getSubmissionId?: () => string | Promise<string>;
+  /** Files collection URL — absolute or same-origin, e.g. 'https://host/api/v1/files' or '/api/v1/files'. */
+  filesUrl: Resolvable;
+  /** Current bearer token (raw, no 'Bearer ' prefix). Read per request. */
+  getToken: Resolvable;
+  /** Current workspace id — added as ?workspaceId= on upload when set. */
+  getWorkspaceId?: Resolvable;
+  /** Current CHEFS submission id (the owning resource) — sent as submissionId when set. */
+  getSubmissionId?: Resolvable;
+  /** Extra request headers, beyond Authorization. */
+  headers?: () => Record<string, string> | Promise<Record<string, string>>;
+  /** Multipart field name for the file name. Default 'fileName'. */
+  fileNameField?: string;
+  /** Multipart field name for the directory. Default 'dir'. */
+  dirField?: string;
+  /** Multipart field name for the submission id. Default 'submissionId'. */
+  submissionField?: string;
+  /** Query param name for the workspace id. Default 'workspaceId'. */
+  workspaceParam?: string;
 }
 
-const trimTrailingSlash = (s: string) => String(s || '').replace(/\/+$/, '');
-// Normalize to a leading-slash, no-trailing-slash path (e.g. 'api/v1/files/' -> '/api/v1/files').
-const normalizePath = (s: string) => `/${String(s || '').replace(/^\/+/, '').replace(/\/+$/, '')}`;
+// Give an opened tab time to read the blob before revoking its object URL.
+const OBJECT_URL_TTL_MS = 60000;
+
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+
+/** Resolve a static value or getter to a string ('' when absent). */
+const resolveValue = async (value?: Resolvable): Promise<string> => {
+  if (typeof value === 'function') {
+    return (await value()) || '';
+  }
+  return value || '';
+};
+
+/**
+ * POST a multipart body over XHR (fetch can't report upload progress or abort).
+ * Resolves the parsed JSON; rejects with an Error. Abort is tagged so File.js
+ * shows its "aborted" message.
+ */
+const xhrPost = (
+  url: string,
+  body: FormData,
+  requestHeaders: Record<string, string>,
+  progressCallback: any,
+  abortCallback: any,
+): Promise<any> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    if (xhr.upload && typeof progressCallback === 'function') {
+      xhr.upload.onprogress = progressCallback;
+    }
+    if (typeof abortCallback === 'function') {
+      abortCallback(() => xhr.abort());
+    }
+    xhr.open('POST', url);
+    Object.keys(requestHeaders).forEach((name) => xhr.setRequestHeader(name, requestHeaders[name]));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText || '{}'));
+        } catch {
+          resolve({});
+        }
+      } else {
+        reject(new Error(xhr.responseText || `Upload failed (${xhr.status}).`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed: network error.'));
+    xhr.onabort = () => reject(Object.assign(new Error('Upload was aborted.'), { type: 'abort' }));
+    xhr.send(body);
+  });
 
 export function createChefsProvider(config: ChefsProviderConfig) {
   const {
-    apiBase = '',
-    filesPath = '/api/v1/files',
+    filesUrl,
     getToken,
     getWorkspaceId,
     getSubmissionId,
+    headers,
+    fileNameField = 'fileName',
+    dirField = 'dir',
+    submissionField = 'submissionId',
+    workspaceParam = 'workspaceId',
   } = config || ({} as ChefsProviderConfig);
 
-  if (typeof getToken !== 'function' || typeof getWorkspaceId !== 'function') {
-    throw new Error('createChefsProvider requires getToken() and getWorkspaceId() functions.');
+  if (!filesUrl || !getToken) {
+    throw new Error('createChefsProvider requires filesUrl and getToken.');
   }
 
-  const collectionPath = normalizePath(filesPath);
+  // Files base, no trailing slash (may be relative).
+  const collectionUrl = async (): Promise<string> => trimTrailingSlash(await resolveValue(filesUrl));
 
-  // Resolve an app-relative file url (e.g. '/api/v1/files/<id>') against apiBase.
-  const resolveUrl = (url: string) => `${trimTrailingSlash(apiBase)}${url}`;
+  // Auth + any extra headers; the token's Authorization wins.
+  const buildHeaders = async (token: string): Promise<Record<string, string>> => {
+    const extra = headers ? (await headers()) || {} : {};
+    return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+  };
 
-  const authHeaders = (token: string) =>
-    token ? { Authorization: `Bearer ${token}` } : {};
+  // {base}/{id} — uploads always come back with an id.
+  const fileUrl = (base: string, file: any): string => {
+    if (!file || file.id == null) {
+      throw new Error('Cannot resolve file URL: the file has no id.');
+    }
+    return `${base}/${encodeURIComponent(file.id)}`;
+  };
 
-  const chefs = function chefs(formio: any) {
+  const uploadFile = async (...args: any[]) => {
+    // Form.io calls uploadFile positionally:
+    // 0 file, 1 fileName, 2 dir, 3 progressCallback, 4 url, 5 options,
+    // 6 fileKey, 7 groupPermissions, 8 groupId, 9 abortCallback, 10 multipartOptions
+    const [file, fileName, dir, progressCallback, , , fileKey, , , abortCallback] = args;
+
+    const [base, token, workspaceId, submissionId] = await Promise.all([
+      collectionUrl(),
+      resolveValue(getToken),
+      resolveValue(getWorkspaceId),
+      resolveValue(getSubmissionId),
+    ]);
+
+    const separator = base.includes('?') ? '&' : '?';
+    const uploadUrl = workspaceId
+      ? `${base}${separator}${workspaceParam}=${encodeURIComponent(workspaceId)}`
+      : base;
+
+    const body = new FormData();
+    body.append(fileKey || 'file', file, file.name);
+    body.append(fileNameField, fileName);
+    if (dir) {
+      body.append(dirField, dir);
+    }
+    if (submissionId) {
+      body.append(submissionField, submissionId);
+    }
+
+    const requestHeaders = await buildHeaders(token);
+    const response = await xhrPost(uploadUrl, body, requestHeaders, progressCallback, abortCallback);
+    if (response.id == null) {
+      throw new Error('Upload response did not include a file id.');
+    }
+
     return {
-      title: 'CHEFS',
-      name: 'chefs',
-
-      async uploadFile(
-        file: any,
-        fileName: string,
-        dir: string,
-        progressCallback: any,
-        _url: string,
-        _options: any,
-        fileKey: string,
-        _groupPermissions: any,
-        _groupId: any,
-        abortCallback: any,
-      ) {
-        const [token, workspaceId, submissionId] = await Promise.all([
-          Promise.resolve(getToken()),
-          Promise.resolve(getWorkspaceId()),
-          getSubmissionId ? Promise.resolve(getSubmissionId()) : Promise.resolve(''),
-        ]);
-
-        let uploadUrl = `${trimTrailingSlash(apiBase)}${collectionPath}`;
-        if (workspaceId) {
-          uploadUrl += `?workspaceId=${encodeURIComponent(workspaceId)}`;
-        }
-
-        return await new Promise((resolve, reject) => {
-          const formData = new FormData();
-          formData.append(fileKey || 'file', file, file.name);
-          formData.append('fileName', fileName);
-          if (dir) {
-            formData.append('dir', dir);
-          }
-          // The CHEFS submission id (owning resource) supplied by getSubmissionId.
-          if (submissionId) {
-            formData.append('submissionId', submissionId);
-          }
-
-          const xhr = new XMLHttpRequest();
-          if (xhr.upload && typeof progressCallback === 'function') {
-            xhr.upload.onprogress = progressCallback;
-          }
-          if (typeof abortCallback === 'function') {
-            abortCallback(() => xhr.abort());
-          }
-
-          xhr.open('POST', uploadUrl);
-          if (token) {
-            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-          }
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              let response: any = {};
-              try {
-                response = JSON.parse(xhr.responseText || '{}');
-              } catch (e) {
-                response = {};
-              }
-              const id = response.id;
-              resolve({
-                storage: 'chefs',
-                id,
-                name: response.name || fileName,
-                originalName: response.originalName || file.name,
-                // Keep the app-relative url the backend returns; it is resolved
-                // against apiBase at download/delete time so apiBase can change.
-                url: response.url || `${collectionPath}/${id}`,
-                size: response.size != null ? response.size : file.size,
-                type: response.type || file.type,
-                data: response.data || {},
-              });
-            } else {
-              reject(xhr.responseText || `Unable to upload file (${xhr.status})`);
-            }
-          };
-          xhr.onerror = () => reject(xhr.responseText || 'Unable to upload file');
-          xhr.onabort = () => reject({ type: 'abort' });
-
-          xhr.send(formData);
-        });
-      },
-
-      async downloadFile(file: any) {
-        const token = await Promise.resolve(getToken());
-        const res = await fetch(resolveUrl(file.url), {
-          method: 'GET',
-          headers: authHeaders(token),
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          return Promise.reject(detail || `Unable to download file (${res.status})`);
-        }
-        const blob = await res.blob();
-        // Hand Form.io a blob object URL it can open / use as an <img> src.
-        const objectUrl = URL.createObjectURL(blob);
-        setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-        return { ...file, url: objectUrl };
-      },
-
-      async deleteFile(file: any) {
-        const token = await Promise.resolve(getToken());
-        const res = await fetch(resolveUrl(file.url), {
-          method: 'DELETE',
-          headers: authHeaders(token),
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          return Promise.reject(detail || `Unable to delete file (${res.status})`);
-        }
-        return 'File deleted';
-      },
+      storage: 'chefs',
+      id: response.id,
+      name: response.name || fileName,
+      originalName: response.originalName || file.name,
+      url: `${base}/${encodeURIComponent(response.id)}`,
+      size: response.size != null ? response.size : file.size,
+      type: response.type || file.type,
     };
   };
 
-  // Static title so the component's Storage dropdown shows a friendly label.
-  (chefs as any).title = 'CHEFS';
-  return chefs;
+  const downloadFile = async (file: any) => {
+    const [base, token] = await Promise.all([collectionUrl(), resolveValue(getToken)]);
+    const response = await fetch(fileUrl(base, file), { method: 'GET', headers: await buildHeaders(token) });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Unable to download file (${response.status}).`);
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS);
+    return { ...file, url: objectUrl };
+  };
+
+  const deleteFile = async (file: any) => {
+    const [base, token] = await Promise.all([collectionUrl(), resolveValue(getToken)]);
+    const response = await fetch(fileUrl(base, file), { method: 'DELETE', headers: await buildHeaders(token) });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Unable to delete file (${response.status}).`);
+    }
+    return 'File deleted';
+  };
+
+  // Regular function, not an arrow: Form.io calls `new Provider(this)`.
+  const chefs = function chefs() {
+    return { title: 'CHEFS', name: 'chefs', uploadFile, downloadFile, deleteFile };
+  };
+  // Label for the component's Storage dropdown.
+  return Object.assign(chefs, { title: 'CHEFS' });
 }
 
 export default createChefsProvider;
