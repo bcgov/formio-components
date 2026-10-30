@@ -137,4 +137,78 @@ const EditFormUtils = {
   }
 };
 
+/**
+ * Checks if IndexedDB is supported and fully usable (handles Private Mode/blocked storage).
+ */
+async function checkIndexedDBSupport() {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return false;
+  }
+
+  try {
+    return await new Promise((resolve) => {
+      // Attempt to open a temporary test database
+      const request = window.indexedDB.open('__idb_test_db__');
+
+      request.onerror = () => {
+        resolve(false);
+      };
+
+      request.onsuccess = () => {
+        const db = request.result;
+        db.close();
+
+        // Clean up the test database immediately
+        try {
+          window.indexedDB.deleteDatabase('__idb_test_db__');
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+
+        resolve(true);
+      };
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Checks if localStorage is supported and fully usable (handles quota errors or disabled storage).
+ */
+function checkLocalStorageSupport() {
+  if (typeof window === 'undefined' || !('localStorage' in window)) {
+    return false;
+  }
+
+  try {
+    const testKey = '__ls_test_key__';
+    window.localStorage.setItem(testKey, testKey);
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch (e) {
+    // Catches QuotaExceededError or security restrictions blocking storage
+    return false;
+  }
+}
+
+/**
+ * Evaluates available storage based on your priority:
+ * IndexedDB -> localStorage -> 'none'
+ */
+export async function getBestStorageStrategy() {
+  // 1. Check IndexedDB first
+  if (await checkIndexedDBSupport()) {
+    return 'indexeddb';
+  }
+
+  // 2. Fall back to localStorage
+  if (checkLocalStorageSupport()) {
+    return 'localstorage';
+  }
+
+  // 3. Fall back to error/none
+  return 'none';
+}
+
 export default EditFormUtils;
