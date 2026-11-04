@@ -16,8 +16,10 @@
  *   ...all with `Authorization: Bearer <token>`.
  *
  * getUserId() tells BCGovFile who is signed in ('' when anonymous), from getUserId or else the
- * token's iss + sub. Uploads given options.expectedUserId are refused unless the token belongs to
- * that user, so files stored in the browser are only ever uploaded as the user who added them.
+ * token's iss + sub. With no token the user is anonymous only when isAnonymous says so; otherwise it
+ * throws, since an empty token may just mean the session is still loading or refreshing. Uploads
+ * given options.expectedUserId are refused unless the token belongs to that user, so files stored in
+ * the browser are only ever uploaded as the user who added them.
  */
 
 /** Static value, or a sync/async getter for it. */
@@ -34,6 +36,11 @@ export interface ChefsProviderConfig {
   getSubmissionId?: Resolvable;
   /** Signed-in user's id ('' when anonymous). Defaults to the token's iss + sub. */
   getUserId?: Resolvable;
+  /**
+   * Whether this session is deliberately anonymous (e.g. a public form). Only consulted when the
+   * token is empty: then the user is anonymous ('') if this resolves true, and unknown otherwise.
+   */
+  isAnonymous?: () => boolean | Promise<boolean>;
   /** Extra request headers, beyond Authorization. */
   headers?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Multipart field name for the file name. Default 'fileName'. */
@@ -76,10 +83,10 @@ const decodeJwtPayload = (token: string): any => {
   }
 };
 
-/** The token's user ('' when there is no token). Throws when the token says nothing about who it is. */
+/** The token's user. Throws when there is no token or it says nothing about who it is. */
 const userIdFromToken = (token: string): string => {
   if (!token) {
-    return '';
+    throw new Error('No token, so who is signed in is unknown; pass isAnonymous for anonymous sessions.');
   }
   const payload = decodeJwtPayload(token);
   if (!payload?.sub) {
@@ -134,6 +141,7 @@ export function createChefsProvider(config: ChefsProviderConfig) {
     getWorkspaceId,
     getSubmissionId,
     getUserId,
+    isAnonymous,
     headers,
     fileNameField = 'fileName',
     dirField = 'dir',
@@ -162,8 +170,16 @@ export function createChefsProvider(config: ChefsProviderConfig) {
     return `${base}/${encodeURIComponent(file.id)}`;
   };
 
-  const resolveUserId = async (token: string): Promise<string> =>
-    getUserId ? resolveValue(getUserId) : userIdFromToken(token);
+  const resolveUserId = async (token: string): Promise<string> => {
+    if (getUserId) {
+      return resolveValue(getUserId);
+    }
+    // An empty token alone isn't proof of anonymity: it may be a session still loading
+    if (!token && isAnonymous && (await isAnonymous())) {
+      return '';
+    }
+    return userIdFromToken(token);
+  };
 
   const uploadFile = async (...args: any[]) => {
     // Form.io calls uploadFile positionally:

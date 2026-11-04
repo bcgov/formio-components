@@ -7,7 +7,7 @@ export type OfflineStorageStrategy = 'indexeddb' | 'localstorage' | 'none';
  */
 export interface OfflineFileMeta {
   offlineKey: string;
-  /** Form/session the file belongs to (host-provided offlineScope, or the form id). */
+  /** Submission the file belongs to (host-provided offlineScope, else the loaded submission's _id; '' for a new submission, so never restored). */
   scope: string;
   componentPath: string;
   /** Who added it ('' for anonymous); it is only uploaded as them. Absent when the provider can't tell. */
@@ -19,12 +19,24 @@ export interface OfflineFileMeta {
   type: string;
   hash?: string;
   createdAt: number;
+  /**
+   * Set once the file is uploaded: the server's fileInfo. The contents are dropped but this record
+   * is kept, so a saved draft that still holds the placeholder can be given the uploaded file.
+   */
+  uploaded?: any;
+  uploadedAt?: number;
 }
 
 const DB_NAME = 'bcgov-formio-offline-files';
 const STORE_NAME = 'files';
 const LS_PREFIX = 'bcgov-formio-offline-file:';
 const LS_META_PREFIX = 'bcgov-formio-offline-file-meta:';
+/**
+ * Largest file kept in localStorage. Its quota is around 5MB per origin and a data URL is about 1.33
+ * times the file, so anything bigger would fail anyway, after reading the whole file into memory as
+ * base64. Larger files are refused up front and upload() sends them directly instead.
+ */
+export const LOCAL_STORAGE_MAX_FILE_BYTES = 3 * 1024 * 1024;
 
 let strategyPromise: Promise<OfflineStorageStrategy> | null = null;
 let persistRequested = false;
@@ -141,6 +153,9 @@ export async function saveOfflineFile(
     }
   }
   if (strategy === 'localstorage') {
+    if (file.size > LOCAL_STORAGE_MAX_FILE_BYTES) {
+      throw Object.assign(new Error('the file is too large to keep in this browser'), { code: 'too-large' });
+    }
     const dataUrl = await blobToDataUrl(file);
     // Throws QuotaExceededError when the file is too large for localStorage
     window.localStorage.setItem(LS_PREFIX + key, dataUrl);
@@ -156,22 +171,40 @@ export async function saveOfflineFile(
 }
 
 export interface OfflineFileRecord {
-  blob: Blob;
+  /** The contents; null once uploaded (see meta.uploaded). */
+  blob: Blob | null;
   meta: OfflineFileMeta;
 }
 
+/**
+ * The stored file, or null when it isn't there (including when this browser has no such storage at
+ * all). Rejects when the storage exists but the read fails.
+ */
 export async function getOfflineFile(strategy: OfflineStorageStrategy, key: string): Promise<OfflineFileRecord | null> {
   if (strategy === 'indexeddb') {
+    if (typeof window === 'undefined' || !('indexedDB' in window) || !window.indexedDB) {
+      return null;
+    }
     const record: any = await idbRequest('readonly', (store) => store.get(key));
+    if (record?.meta?.uploaded) {
+      return { blob: null, meta: record.meta };
+    }
     return record?.blob ? { blob: record.blob, meta: record.meta } : null;
   }
   if (strategy === 'localstorage') {
-    const dataUrl = window.localStorage.getItem(LS_PREFIX + key);
-    const metaJson = window.localStorage.getItem(LS_META_PREFIX + key);
-    if (!dataUrl || !metaJson) {
+    if (typeof window === 'undefined' || !('localStorage' in window) || !window.localStorage) {
       return null;
     }
-    return { blob: await dataUrlToBlob(dataUrl), meta: JSON.parse(metaJson) };
+    const metaJson = window.localStorage.getItem(LS_META_PREFIX + key);
+    if (!metaJson) {
+      return null;
+    }
+    const meta: OfflineFileMeta = JSON.parse(metaJson);
+    if (meta.uploaded) {
+      return { blob: null, meta };
+    }
+    const dataUrl = window.localStorage.getItem(LS_PREFIX + key);
+    return dataUrl ? { blob: await dataUrlToBlob(dataUrl), meta } : null;
   }
   return null;
 }
@@ -209,6 +242,96 @@ export async function listOfflineFiles(): Promise<OfflineFileListing[]> {
     // localStorage unavailable
   }
   return listings;
+}
+
+/**
+ * Change a stored file's metadata (e.g. its componentPath after a DataGrid row moved). Resolves
+ * false when the file isn't stored.
+ */
+export async function updateOfflineFileMeta(
+  strategy: OfflineStorageStrategy,
+  key: string,
+  changes: Partial<OfflineFileMeta>,
+): Promise<boolean> {
+  if (strategy === 'indexeddb') {
+    const db = await openDb();
+    try {
+      // Read and write in one transaction so a concurrent delete can't be undone by the put
+      return await new Promise<boolean>((resolve, reject) => {
+        let found = false;
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.get(key);
+        request.onsuccess = () => {
+          if (request.result) {
+            found = true;
+            store.put({ ...request.result, meta: { ...request.result.meta, ...changes } });
+          }
+        };
+        tx.oncomplete = () => resolve(found);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
+  }
+  if (strategy === 'localstorage') {
+    const metaJson = window.localStorage.getItem(LS_META_PREFIX + key);
+    if (!metaJson) {
+      return false;
+    }
+    window.localStorage.setItem(LS_META_PREFIX + key, JSON.stringify({ ...JSON.parse(metaJson), ...changes }));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Record that a stored file was uploaded: drop its contents and keep its metadata with the server's
+ * fileInfo. Resolves false when the file isn't stored.
+ */
+export async function markOfflineFileUploaded(
+  strategy: OfflineStorageStrategy,
+  key: string,
+  uploaded: any,
+): Promise<boolean> {
+  if (strategy === 'indexeddb') {
+    const db = await openDb();
+    try {
+      return await new Promise<boolean>((resolve, reject) => {
+        let found = false;
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.get(key);
+        request.onsuccess = () => {
+          if (request.result) {
+            found = true;
+            store.put({ key, blob: null, meta: { ...request.result.meta, uploaded, uploadedAt: Date.now() } });
+          }
+        };
+        tx.oncomplete = () => resolve(found);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
+  }
+  if (strategy === 'localstorage') {
+    const metaJson = window.localStorage.getItem(LS_META_PREFIX + key);
+    if (!metaJson) {
+      return false;
+    }
+    // Metadata first, so the record never looks pending without its contents
+    window.localStorage.setItem(
+      LS_META_PREFIX + key,
+      JSON.stringify({ ...JSON.parse(metaJson), uploaded, uploadedAt: Date.now() }),
+    );
+    window.localStorage.removeItem(LS_PREFIX + key);
+    return true;
+  }
+  return false;
 }
 
 export async function deleteOfflineFile(strategy: OfflineStorageStrategy, key: string) {
