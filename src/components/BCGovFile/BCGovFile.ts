@@ -617,8 +617,9 @@ export default class BCGovFile extends ParentComponent {
     try {
       const body = JSON.parse(text);
       message = body?.message || body?.detail || body?.error || text;
-    } catch {}
-    message = String(message).trim() || `HTTP ${err?.status}`;
+    } finally {
+      message = String(message).trim() || `HTTP ${err?.status}`;
+    }
     return message.length > 120 ? `${message.slice(0, 117)}...` : message;
   }
 
