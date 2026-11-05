@@ -31,9 +31,17 @@ type OwnOfflineFileLookup =
   | { status: 'unknown' };
 
 const ID = 'bcgov-file';
+
+const COUNT_UPLOAD_ATTEMPTS = String(
+  (ParentComponent as any)?.prototype?.uploadFile ?? '',
+).includes('fileUploadingStart');
+
 // Retries of files whose upload failed while online back off from 30s, doubling up to 5 minutes
 const OFFLINE_RETRY_MS = 30000;
 const OFFLINE_RETRY_MAX_MS = 300000;
+// First follow-up after the browser comes back online, in case that moment's attempt couldn't start
+// (the session's token still refreshing, a sync already running, the network not quite up)
+const ONLINE_RETRY_MS = 2000;
 // Records of uploaded files (see markOfflineFileUploaded) are dropped on submit, or after this long
 const UPLOADED_RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DISPLAY = 'File Upload';
@@ -110,6 +118,11 @@ export default class BCGovFile extends ParentComponent {
   private offlineRetryDelay = OFFLINE_RETRY_MS;
   // Files uploaded during the current sync, by offlineKey (see tidyOfflineValue)
   private uploadedThisSync = new Map<string, any>();
+  // Backs resolvedFiles; no initializer, since Form.io assigns it during construction
+  private resolvedUploads: any[];
+  private resyncingLeftovers = false;
+  // Set on destroy, so a refresh still in flight doesn't schedule retries for a component that's gone
+  private offlineDestroyed = false;
   // Uploaded from browser storage in this page load, so their rows can say so
   private uploadedFromStorage = new WeakSet<object>();
   // Why a stored file's last upload was refused, when the server said; shown on its pending badge
@@ -169,7 +182,11 @@ export default class BCGovFile extends ParentComponent {
     const result = super.attach(element);
     if (typeof window !== 'undefined') {
       this.addEventListener(window, 'online', () => {
-        this.offlineRetryDelay = OFFLINE_RETRY_MS;
+        if (this.offlineRetryTimer) {
+          clearTimeout(this.offlineRetryTimer);
+          this.offlineRetryTimer = null;
+        }
+        this.offlineRetryDelay = ONLINE_RETRY_MS;
         this.refreshOfflineFiles();
       });
       if (!this.offlineInitialSyncDone) {
@@ -223,6 +240,7 @@ export default class BCGovFile extends ParentComponent {
       clearTimeout(this.offlineRetryTimer);
       this.offlineRetryTimer = null;
     }
+    this.offlineDestroyed = true;
     this.heldClaims.forEach((release) => release());
     this.forgetRemovedStoredFiles();
     return super.destroy(all);
@@ -239,11 +257,26 @@ export default class BCGovFile extends ParentComponent {
    * The stored file is claimed for the whole upload, so no other tab uploads it at the same time.
    */
   public async uploadFile(fileToSync: any) {
+    fileToSync.reachedProvider = false;
     try {
       return await this.uploadClaimedFile(fileToSync);
+    } catch (err) {
+      // Form.io 5.4 keeps each attempt's promise by name and only drops it on success, so a later
+      // sync would re-await this rejection instead of trying again (and emit fileUploadingEnd with
+      // no start). Dropping it lets the error row be retried, as in 5.0.
+      if (Array.isArray(this.pendingfiles)) {
+        this.pendingfiles = this.pendingfiles.filter((entry: any) => entry?.name !== fileToSync.name);
+      }
+      throw err;
     } finally {
       fileToSync.releaseClaim?.();
       delete fileToSync.releaseClaim;
+      // Kept offline or failed before the provider: report the start the provider would have, so
+      // the fileUploadingEnd Form.io emits for this attempt doesn't drive the button's count below 0
+      if (COUNT_UPLOAD_ATTEMPTS && !fileToSync.reachedProvider) {
+        this.emit('fileUploadingStart');
+      }
+      delete fileToSync.reachedProvider;
     }
   }
 
@@ -280,8 +313,14 @@ export default class BCGovFile extends ParentComponent {
 
     let fileInfo: any;
     try {
+      fileToSync.reachedProvider = true;
       fileInfo = await super.uploadFile(fileToSync);
     } catch (err) {
+      if (this.isPermanentUploadError(err) || err?.type === 'abort') {
+        // Rejected by the server or aborted by the user: sending it again won't help, so later
+        // syncs skip the row (as Form.io does for files that fail its own checks) until removed
+        fileToSync.isValidationError = true;
+      }
       if (!placeholder) {
         throw err;
       }
@@ -329,20 +368,69 @@ export default class BCGovFile extends ParentComponent {
     return fileInfo;
   }
 
+  /**
+   * A single-file field still offers the picker while its only file is a failed row (the template
+   * hides it only once the value has a file). Picking again replaces that row, so the field can't
+   * end up with a second file if the failed one is retried.
+   */
+  public async prepareFilesToUpload(files: any) {
+    if (!this.component.multiple && files?.length && !this.isSyncing && this.filesToSync?.filesToUpload) {
+      this.filesToSync.filesToUpload = this.filesToSync.filesToUpload.filter((row: any) => row?.status !== 'error');
+    }
+    return super.prepareFilesToUpload(files);
+  }
+
   public async syncFiles() {
     try {
       return await super.syncFiles();
     } finally {
       this.tidyOfflineValue(this.uploadedThisSync);
       this.uploadedThisSync = new Map();
+      this.resyncLeftoverUploads();
       this.scheduleOfflineRetry();
     }
+  }
+
+  /**
+   * A sync that rejects, or that Form.io 5.4 cuts short because rows were added or removed while it
+   * ran, leaves finished uploads as 'success' rows rather than in the value. They count as pending,
+   * so the submit button would stay disabled; one more sync moves them in from resolvedFiles.
+   */
+  private resyncLeftoverUploads() {
+    const leftover = (this.filesToSync?.filesToUpload ?? []).some((row: any) => row?.status === 'success');
+    if (!leftover || this.resyncingLeftovers) {
+      return;
+    }
+    this.resyncingLeftovers = true;
+    setTimeout(() => {
+      const run = this.isSyncing ? Promise.resolve() : this.syncFiles().catch(() => undefined);
+      run.finally(() => {
+        this.resyncingLeftovers = false;
+      });
+    });
   }
 
   /**
    * Give stored files a last chance to upload before the submit validates. Form.io settles these
    * with Promise.allSettled and ignores rejections, so the actual block is validateComponent.
    */
+  /**
+   * Form.io 5.4 records every upload attempt here, failed ones with a null fileInfo, and its next
+   * lookup reads fileInfo.originalName on each entry. One failed upload (e.g. a 413) then makes
+   * every other upload finishing in that sync throw: the sync rejects and uploaded files are left
+   * as rows instead of being added to the value. Only successful attempts are kept.
+   */
+  public get resolvedFiles(): any[] {
+    return this.resolvedUploads;
+  }
+
+  public set resolvedFiles(files: any[]) {
+    const kept: any[] = (Array.isArray(files) ? files : []).filter((entry: any) => entry?.fileInfo);
+    kept.push = (...entries: any[]) =>
+      Array.prototype.push.apply(kept, entries.filter((entry: any) => entry?.fileInfo));
+    this.resolvedUploads = kept;
+  }
+
   public init() {
     super.init();
     // The submitted value now references the uploads, so their records are no longer needed
@@ -405,7 +493,9 @@ export default class BCGovFile extends ParentComponent {
       .then(() => this.updateStoredFilePaths())
       .then(() => this.restoreOfflineFiles())
       .then(() => this.retryOfflineFiles())
-      .catch(() => undefined);
+      .catch(() => undefined)
+      // Files still pending (the retry couldn't start, or failed) are tried again later
+      .then(() => this.scheduleOfflineRetry());
     return this.offlineRefresh;
   }
 
@@ -1032,7 +1122,7 @@ export default class BCGovFile extends ParentComponent {
     if (!pending) {
       this.offlineRetryDelay = OFFLINE_RETRY_MS;
     }
-    if (this.offlineRetryTimer || !pending || !this.browserIsOnline()) {
+    if (this.offlineRetryTimer || !pending || !this.browserIsOnline() || this.offlineDestroyed) {
       return;
     }
     this.offlineRetryTimer = setTimeout(() => {
