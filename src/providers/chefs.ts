@@ -14,6 +14,12 @@
  *   Download: GET    {filesUrl}/{id}
  *   Delete:   DELETE {filesUrl}/{id}
  *   ...all with `Authorization: Bearer <token>`.
+ *
+ * getUserId() tells BCGovFile who is signed in ('' when anonymous), from getUserId or else the
+ * token's iss + sub. With no token the user is anonymous only when isAnonymous says so; otherwise it
+ * throws, since an empty token may just mean the session is still loading or refreshing. Uploads
+ * given options.expectedUserId are refused unless the token belongs to that user, so files stored in
+ * the browser are only ever uploaded as the user who added them.
  */
 
 /** Static value, or a sync/async getter for it. */
@@ -28,6 +34,13 @@ export interface ChefsProviderConfig {
   getWorkspaceId?: Resolvable;
   /** Current CHEFS submission id (the owning resource) — sent as submissionId when set. */
   getSubmissionId?: Resolvable;
+  /** Signed-in user's id ('' when anonymous). Defaults to the token's iss + sub. */
+  getUserId?: Resolvable;
+  /**
+   * Whether this session is deliberately anonymous (e.g. a public form). Only consulted when the
+   * token is empty: then the user is anonymous ('') if this resolves true, and unknown otherwise.
+   */
+  isAnonymous?: () => boolean | Promise<boolean>;
   /** Extra request headers, beyond Authorization. */
   headers?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Multipart field name for the file name. Default 'fileName'. */
@@ -51,6 +64,35 @@ const resolveValue = async (value?: Resolvable): Promise<string> => {
     return (await value()) || '';
   }
   return value || '';
+};
+
+/** Decode a JWT's payload, or null when the token isn't a JWT. */
+const decodeJwtPayload = (token: string): any => {
+  const part = token.split('.')[1];
+  if (!part) {
+    return null;
+  }
+  try {
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+    const json = decodeURIComponent(
+      Array.from(atob(base64), (c) => `%${c.charCodeAt(0).toString(16).padStart(2, '0')}`).join(''),
+    );
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+};
+
+/** The token's user. Throws when there is no token or it says nothing about who it is. */
+const userIdFromToken = (token: string): string => {
+  if (!token) {
+    throw new Error('No token, so who is signed in is unknown; pass isAnonymous for anonymous sessions.');
+  }
+  const payload = decodeJwtPayload(token);
+  if (!payload?.sub) {
+    throw new Error('Unable to tell who is signed in from the token; pass getUserId.');
+  }
+  return payload.iss ? `${payload.iss}|${payload.sub}` : String(payload.sub);
 };
 
 /**
@@ -83,10 +125,11 @@ const xhrPost = (
           resolve({});
         }
       } else {
-        reject(new Error(xhr.responseText || `Upload failed (${xhr.status}).`));
+        // status lets callers tell a rejected file from a transient failure
+        reject(Object.assign(new Error(xhr.responseText || `Upload failed (${xhr.status}).`), { status: xhr.status }));
       }
     };
-    xhr.onerror = () => reject(new Error('Upload failed: network error.'));
+    xhr.onerror = () => reject(Object.assign(new Error('Upload failed: network error.'), { status: 0 }));
     xhr.onabort = () => reject(Object.assign(new Error('Upload was aborted.'), { type: 'abort' }));
     xhr.send(body);
   });
@@ -97,6 +140,8 @@ export function createChefsProvider(config: ChefsProviderConfig) {
     getToken,
     getWorkspaceId,
     getSubmissionId,
+    getUserId,
+    isAnonymous,
     headers,
     fileNameField = 'fileName',
     dirField = 'dir',
@@ -125,11 +170,22 @@ export function createChefsProvider(config: ChefsProviderConfig) {
     return `${base}/${encodeURIComponent(file.id)}`;
   };
 
+  const resolveUserId = async (token: string): Promise<string> => {
+    if (getUserId) {
+      return resolveValue(getUserId);
+    }
+    // An empty token alone isn't proof of anonymity: it may be a session still loading
+    if (!token && isAnonymous && (await isAnonymous())) {
+      return '';
+    }
+    return userIdFromToken(token);
+  };
+
   const uploadFile = async (...args: any[]) => {
     // Form.io calls uploadFile positionally:
     // 0 file, 1 fileName, 2 dir, 3 progressCallback, 4 url, 5 options,
     // 6 fileKey, 7 groupPermissions, 8 groupId, 9 abortCallback, 10 multipartOptions
-    const [file, fileName, dir, progressCallback, , , fileKey, , , abortCallback] = args;
+    const [file, fileName, dir, progressCallback, , options, fileKey, , , abortCallback] = args;
 
     const [base, token, workspaceId, submissionId] = await Promise.all([
       collectionUrl(),
@@ -137,6 +193,12 @@ export function createChefsProvider(config: ChefsProviderConfig) {
       resolveValue(getWorkspaceId),
       resolveValue(getSubmissionId),
     ]);
+
+    // Checked against the token this request sends, so a sign-in change can't slip in between
+    const expectedUserId = options?.expectedUserId;
+    if (typeof expectedUserId === 'string' && (await resolveUserId(token)) !== expectedUserId) {
+      throw Object.assign(new Error('The file was added by a different user.'), { code: 'user-mismatch' });
+    }
 
     const separator = base.includes('?') ? '&' : '?';
     const uploadUrl = workspaceId
@@ -194,7 +256,14 @@ export function createChefsProvider(config: ChefsProviderConfig) {
 
   // Regular function, not an arrow: Form.io calls `new Provider(this)`.
   const chefs = function chefs() {
-    return { title: 'CHEFS', name: 'chefs', uploadFile, downloadFile, deleteFile };
+    return {
+      title: 'CHEFS',
+      name: 'chefs',
+      uploadFile,
+      downloadFile,
+      deleteFile,
+      getUserId: async () => resolveUserId(await resolveValue(getToken)),
+    };
   };
   // Label for the component's Storage dropdown.
   return Object.assign(chefs, { title: 'CHEFS' });
