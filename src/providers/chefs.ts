@@ -182,10 +182,11 @@ export function createChefsProvider(config: ChefsProviderConfig) {
   };
 
   const uploadFile = async (...args: any[]) => {
-    // Form.io calls uploadFile positionally:
-    // 0 file, 1 fileName, 2 dir, 3 progressCallback, 4 url, 5 options,
-    // 6 fileKey, 7 groupPermissions, 8 groupId, 9 abortCallback, 10 multipartOptions
-    const [file, fileName, dir, progressCallback, , options, fileKey, , , abortCallback] = args;
+    // 0 file, 1 fileName, 2 dir, 3 progressCallback, 4 url, 5 options, 6 fileKey,
+    // 7 groupPermissions, 8 groupId, then
+    //   5.0:  9 abortCallback, 10 multipartOptions
+    const [file, fileName, dir, progressCallback, , options, fileKey] = args;
+    const abortCallback = args[9];
 
     const [base, token, workspaceId, submissionId] = await Promise.all([
       collectionUrl(),
